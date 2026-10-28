@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---- global middleware ----
+// global middleware
 app.use(helmet({ contentSecurityPolicy: false })); // security headers
 app.use(cors());
 app.use(morgan('dev'));                // request logging

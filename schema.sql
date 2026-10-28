@@ -38,14 +38,13 @@ CREATE TABLE events (
   is_cancelled BOOLEAN NOT NULL DEFAULT false
 );
 
--- Replaces no_vip/no_regular/no_vvip + 3 price columns on events (normalization)
 CREATE TABLE ticket_tiers (
   tier_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id  UUID NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
   type      ticket_type NOT NULL,
   price     NUMERIC(10,2) NOT NULL CHECK (price >= 0),
   total     INT NOT NULL CHECK (total >= 0),
-  available INT NOT NULL CHECK (available >= 0 AND available <= total), -- DB itself refuses overselling
+  available INT NOT NULL CHECK (available >= 0 AND available <= total), 
   UNIQUE (event_id, type)
 );
 
@@ -123,7 +122,7 @@ CREATE TABLE costs (
   amount         NUMERIC(12,2) NOT NULL CHECK (amount >= 0)
 );
 
-CREATE TABLE tasks (          -- "Track tasks" requirement had no table
+CREATE TABLE tasks (         
   task_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id    UUID NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
   title       VARCHAR(200) NOT NULL,

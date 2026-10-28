@@ -1,4 +1,3 @@
-// Audit trail: WHO did WHAT to WHICH resource and WHEN.
 // Usage: router.post('/', requireAuth, audit('create_event','events'), handler)
 import { query } from '../db.js';
 

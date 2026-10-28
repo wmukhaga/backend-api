@@ -1,5 +1,4 @@
-// Every 30s: tickets still HELD after the TTL go back to stock.
-// This is what prevents "ghost bookings" (stock locked forever by abandoned checkouts).
+// Every 45s: tickets still HELD after the TTL go back to stock.
 import { withTransaction } from '../db.js';
 
 export async function releaseExpiredHolds() {
@@ -18,4 +17,4 @@ export async function releaseExpiredHolds() {
 }
 
 export const startHoldSweeper = () =>
-  setInterval(() => releaseExpiredHolds().catch((e) => console.error('sweeper', e.message)), 30_000);
+  setInterval(() => releaseExpiredHolds().catch((e) => console.error('sweeper', e.message)), 45_000);
