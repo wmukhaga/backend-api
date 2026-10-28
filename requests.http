@@ -1,0 +1,32 @@
+@baseUrl = http://localhost:3000/api
+
+### 1. Health check
+GET {{baseUrl}}/health
+
+### 2. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@tikosorted.com",
+  "password": "Admin1234!"
+}
+
+### Saves the token from the login response so other requests can use it
+@token = {{login.response.body.token}}
+
+### 3. Create an event
+POST {{baseUrl}}/events
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name":  "Isukuti Fest ",
+  "location": "Nairobi",
+  "eventDate": "2026-12-20T18:00:00Z",
+  "tiers": [
+    { "type": "regular", "price": 1000, "total": 5 },
+    { "type": "vip", "price": 3000, "total": 2 }
+  ]
+}

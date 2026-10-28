@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>TikoSorted</title></head>
+<body>
+  <h1>TikoSorted</h1>
+  <ul id="events"></ul>
+  <script>
+    fetch('/api/events').then(r => r.json()).then(list => {
+      document.getElementById('events').innerHTML =
+        list.map(e => `<li>${e.name} - ${e.location}</li>`).join('');
+    });
+  </script>
+</body></html>
