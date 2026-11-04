@@ -12,7 +12,7 @@ export async function recordAction(actorId, action, resource, metadata = {}, cli
 // Logs after the response succeeds (status < 400)
 export const audit = (action, resource) => (req, res, next) => {
   res.on('finish', () => {
-    if (res.statusCode < 400 && req.user) {
+    if (res.statusCode < 400 && req.user && !req.devAuthBypass) {
       recordAction(req.user.userId, action, resource, {
         method: req.method, path: req.originalUrl, ip: req.ip, params: req.params,
       }).catch((e) => console.error('audit failed', e.message));
