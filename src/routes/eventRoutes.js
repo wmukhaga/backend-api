@@ -20,7 +20,21 @@ r.get('/', wrap(async (req, res) => {
 }));
 
 r.get('/:id', wrap(async (req, res) => {
-  const { rows } = await query('SELECT * FROM events WHERE event_id = $1', [req.params.id]);
+  const { rows } = await query(
+    `SELECT e.event_id, e.name, e.location, e.event_date, e.event_stage,
+            json_agg(
+              json_build_object(
+                'tierId', t.tier_id,
+                'type', t.type,
+                'price', t.price,
+                'available', t.available
+              )
+            ) FILTER (WHERE t.tier_id IS NOT NULL) AS tiers
+     FROM events e
+     LEFT JOIN ticket_tiers t ON t.event_id = e.event_id
+     WHERE e.event_id = $1
+     GROUP BY e.event_id`,
+    [req.params.id]);
   if (!rows[0]) throw httpError(404, 'Event not found');
   res.json(rows[0]);
 }));

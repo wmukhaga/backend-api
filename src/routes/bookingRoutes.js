@@ -17,7 +17,6 @@ r.post('/checkout', requireIdempotencyKey, wrap(async (req, res) => {
 
   const booking = await withTransaction(async (c) => {
     // 2. ATOMIC stock decrement: the WHERE clause is the guard against overselling.
-    //    Two people buying the last ticket -> only one UPDATE matches.
     const stock = await c.query(
       `UPDATE ticket_tiers t SET available = available - $1
        FROM events e
@@ -28,7 +27,7 @@ r.post('/checkout', requireIdempotencyKey, wrap(async (req, res) => {
     const { event_id, price } = stock.rows[0];
 
     // 3. Booking in "held" state with a short TTL
-    const ttl = Number(process.env.HOLD_TTL_SECONDS || 600);
+    const ttl = Number(process.env.HOLD_TTL_SECONDS || 600); 
     const b = await c.query(
       `INSERT INTO bookings (idempotency_key, event_id, tier_id, no_of_tickets, amount,
          booker_phone, booker_email, status, hold_expires_at)

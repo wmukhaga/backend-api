@@ -127,6 +127,7 @@ CREATE TABLE tasks (
   event_id    UUID NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
   title       VARCHAR(200) NOT NULL,
   assigned_to UUID REFERENCES mgt_users(user_id),
+  resource    text,
   deadline    TIMESTAMPTZ,
   status      VARCHAR(12) NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','in_progress','done'))
 );
