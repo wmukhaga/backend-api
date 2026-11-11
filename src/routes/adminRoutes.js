@@ -46,10 +46,18 @@ router.get('/events', wrap(async (req, res) => {
   res.json(rows);
 }));
 
+router.get('/management-team', wrap(async (req, res) => {
+  const { rows } = await query(
+    `SELECT user_id AS id, name
+     FROM mgt_users
+     ORDER BY name`);
+  res.json(rows);
+}));
+
 
 router.get('/tasks', wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT t.task_id AS id, t.title, u.name AS "teamOnboard", NULL::text AS resources, t.deadline AS "dueDate",
+    `SELECT t.task_id AS id, t.title, u.name AS "teamOnboard", t.resource AS resources, t.deadline AS "dueDate",
      CASE t.status WHEN 'done' THEN 'COMPLETED' ELSE UPPER(t.status) END AS status FROM tasks t
      LEFT JOIN mgt_users u ON u.user_id = t.assigned_to
      ORDER BY t.deadline NULLS LAST, t.title`);

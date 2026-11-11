@@ -15,11 +15,11 @@ r.get('/', wrap(async (req, res) => {
   res.json(rows);
 }));
 r.post('/', audit('create_task', 'tasks'), wrap(async (req, res) => {
-  const { eventId, title, assignedTo, deadline } = req.body;
+  const { eventId, title, assignedTo, deadline, resource } = req.body;
   if (!eventId || !title) throw httpError(400, 'eventId and title required');
   const { rows } = await query(
-    'INSERT INTO tasks (event_id, title, assigned_to, deadline) VALUES ($1,$2,$3,$4) RETURNING *',
-    [eventId, title, assignedTo || null, deadline || null]);
+    'INSERT INTO tasks (event_id, title, assigned_to, deadline, resource) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+    [eventId, title, assignedTo || null, deadline || null, resource || null]);
   res.status(201).json(rows[0]);
 }));
 r.patch('/:id', audit('update_task', 'tasks'), wrap(async (req, res) => {

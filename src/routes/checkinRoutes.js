@@ -12,18 +12,44 @@ r.use(requireAuth, requireRole('gate_staff', 'logistics'));
 // Gate device downloads all paid tickets for an event (to store in its local DB, e.g. SQLite/IndexedDB)
 r.get('/manifest/:eventId', wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT ticket_id, qr_payload, status, tier_id FROM tickets WHERE event_id = $1 AND status IN ('paid','verified')`,
+    `SELECT t.ticket_id, t.qr_payload, t.status, t.tier_id, tt.type, tt.price, e.name AS event_name
+     FROM tickets t
+     JOIN ticket_tiers tt ON tt.tier_id = t.tier_id
+     JOIN events e ON e.event_id = t.event_id
+     WHERE t.event_id = $1 AND t.status IN ('paid','verified')`,
     [req.params.eventId]);
   res.json(rows);
 }));
 
+// Validate a ticket without consuming it. The gate confirms entry separately.
+r.post('/validate', wrap(async (req, res) => {
+  const parsed = req.body.payload
+    ? verifyQrPayload(req.body.payload)
+    : req.body.ticketId && { ticketId: req.body.ticketId, eventId: req.body.eventId };
+  if (!parsed) throw httpError(400, 'Invalid ticket');
+  const { rows } = await query(
+    `SELECT t.ticket_id, t.status, tt.type, tt.price, e.name AS event_name
+     FROM tickets t
+     JOIN ticket_tiers tt ON tt.tier_id = t.tier_id
+     JOIN events e ON e.event_id = t.event_id
+     WHERE t.ticket_id = $1 AND t.event_id = $2`,
+    [parsed.ticketId, parsed.eventId]);
+  const ticket = rows[0];
+  if (!ticket || !['paid', 'verified'].includes(ticket.status))
+    throw httpError(409, 'Ticket already used or not valid');
+  res.json({ valid: true, ticket });
+}));
+
 // Online scan (when internet works)
 r.post('/scan', wrap(async (req, res) => {
-  const parsed = verifyQrPayload(req.body.payload);
+  const parsed = req.body.payload
+    ? verifyQrPayload(req.body.payload)
+    : req.body.ticketId && { ticketId: req.body.ticketId, eventId: req.body.eventId };
   if (!parsed) throw httpError(400, 'Invalid ticket');
   const { rowCount } = await query(
-    `UPDATE tickets SET status = 'used', used_at = now() WHERE ticket_id = $1 AND status IN ('paid','verified')`,
-    [parsed.ticketId]);
+    `UPDATE tickets SET status = 'used', used_at = now()
+     WHERE ticket_id = $1 AND event_id = $2 AND status IN ('paid','verified')`,
+    [parsed.ticketId, parsed.eventId]);
   if (!rowCount) throw httpError(409, 'Ticket already used or not valid');
   res.json({ valid: true });
 }));
