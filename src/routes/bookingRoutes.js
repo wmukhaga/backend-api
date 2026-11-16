@@ -53,8 +53,12 @@ r.get('/:id/status', wrap(async (req, res) => {
 // Reveller gets e-tickets (only once paid)
 r.get('/:id/tickets', wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT ticket_id, qr_payload, status FROM tickets
-     WHERE booking_id = $1 AND status IN ('paid','verified','used')`, [req.params.id]);
-  res.json(rows);
+  `SELECT t.ticket_id, t.qr_payload, t.status,
+          e.name AS event_name, tt.type
+   FROM tickets t
+   JOIN events e ON e.event_id = t.event_id
+   JOIN ticket_tiers tt ON tt.tier_id = t.tier_id
+   WHERE t.booking_id = $1 AND t.status IN ('paid','verified','used')`, [req.params.id]);
+res.json(rows);
 }));
 export default r;

@@ -4,6 +4,7 @@ const baseUrl = process.env.MPESA_BASE_URL;
 const shortcode = Number(process.env.MPESA_SHORTCODE);
 const passkey = process.env.MPESA_PASSKEY;
 const callbackUrl = process.env.MPESA_CALLBACK_URL;
+const transactionType = process.env.MPESA_TRANSACTION_TYPE || "CustomerPayBillOnline";
 
 // token cache (refresh when expired)
 let cachedToken = null;
@@ -48,7 +49,7 @@ export async function stkpush(bookingId, phoneNumber, amount, reference,) {
       BusinessShortCode: shortcode,
       Password: password,
       Timestamp: ts,
-      TransactionType: "CustomerPayBillOnline",
+      TransactionType: transactionType,
       Amount: amount,
       PartyA: phoneNumber,
       PartyB: shortcode,
