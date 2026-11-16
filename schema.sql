@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto"; -- gen_random_uuid()
 
 CREATE TYPE user_role AS ENUM ('manager','coordinator','finance','logistics','production','marketing','hospitality','compliance','gate_staff');
 CREATE TYPE event_stage AS ENUM ('draft','published','on_sale','sold_out','ongoing','completed','cancelled');
-CREATE TYPE ticket_type AS ENUM ('regular','vip','vvip');
+CREATE TYPE ticket_type AS ENUM ('regular','vip','vvip','early_bird');
 CREATE TYPE ticket_status AS ENUM ('held','paid','verified','used');
 CREATE TYPE booking_status AS ENUM ('held','paid','expired','cancelled');
 CREATE TYPE cost_class AS ENUM ('marketing','sound_equipment','artist','on_ground');
@@ -70,6 +70,19 @@ CREATE TABLE payments (
   amount        NUMERIC(10,2) NOT NULL,
   status        VARCHAR(10) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','success','failed')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE transaction_details (
+  transaction_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  merchant_id           VARCHAR(255),
+  request_id            VARCHAR(255) NOT NULL UNIQUE,
+  amount                NUMERIC(10,2) NOT NULL,
+  phone_no              VARCHAR(12) NOT NULL,
+  result_code           INT,
+  receipt_no            VARCHAR(255),
+  transaction_timestamp TIMESTAMPTZ DEFAULT now(),
+  reference             VARCHAR(50) NOT NULL,
+  description           VARCHAR(100) DEFAULT 'ticket booking payment'
 );
 
 -- One row per seat (your design had a single ticket_id on a booking of many tickets)

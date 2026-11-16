@@ -15,40 +15,53 @@ r.post('/mpesa/stk-push', wrap(async (req, res) => {
   if (!amount || !reference) throw httpError(400, 'Missing amount or reference');
 
   const response = await stkpush(bookingId, phoneNumber, amount, reference, description);
+
+  // Store the CheckoutRequestID so the callback can look it up
+  if (response.ResponseCode === '0') {
+    await withTransaction(async (c) => {
+      await c.query(
+        `INSERT INTO transaction_details (merchant_id, request_id, reference, amount, phone_no, result_code, receipt_no)
+         VALUES ($1,$2,$3,$4,$5,NULL,NULL)`,
+        [response.MerchantRequestID, response.CheckoutRequestID, reference, amount, phoneNumber]
+      );
+    });
+  }
+
   res.json(response);
-}));
+}));   
 
-// Safaricom calls this URL after the customer pays/cancels (must be public HTTPS - use ngrok in dev)
+
 r.post('/mpesa/callback', wrap(async (req, res) => {
-  const {request_id} = req.body;
-  if (!request_id) throw httpError(400, 'Missing request_id');
-  const response = await requestUpdate(request_id);
+  const cb = req.body?.Body?.stkCallback;
+  if (!cb) throw httpError(400, 'Invalid callback body');
+  const { CheckoutRequestID, ResultCode, ResultDesc } = cb;
 
-  const fullResponse = await response.json();
-  const {ResultCode, ResultDesc} = response;
   if (ResultCode !== 0) {
-    console.error(`M-Pesa callback: request_id=${request_id} failed: ${ResultDesc}`);
+    console.error(`M-Pesa callback: ${CheckoutRequestID} failed: ${ResultDesc}`);
     return res.json({ ResultCode, ResultDesc });
   }
 
-  // reconstruct the body of callback 
+  // Extract metadata
+  const items = cb.CallbackMetadata?.Item || [];
+  const get = (name) => items.find(i => i.Name === name)?.Value;
+
   const callbackBody = {
-    ...fullResponse,
-    merchant_id: fullResponse.MerchantRequestID,
-    request_id: fullResponse.CheckoutRequestID, 
-    result_code: fullResponse.ResultCode,
-    result_desc: fullResponse.ResultDesc,
-    amount: fullResponse.CallbackMetadata.Item.find(i => i.Name === 'Amount')?.Value,
-    receipt_no: fullResponse.CallbackMetadata.Item.find(i => i.Name === 'MpesaReceiptNumber')?.Value,
-    transaction_date: fullResponse.CallbackMetadata.Item.find(i => i.Name === 'TransactionDate')?.Value,
-    phone_number: fullResponse.CallbackMetadata.Item.find(i => i.Name === 'PhoneNumber')?.Value
+    merchant_id: cb.MerchantRequestID,
+    request_id: CheckoutRequestID,
+    result_code: ResultCode,
+    result_desc: ResultDesc,
+    amount: get('Amount'),
+    receipt_no: get('MpesaReceiptNumber'),
+    transaction_date: get('TransactionDate'),
+    phone_number: get('PhoneNumber'),
   };
 
-  // payment successful, mark booking paid
-  await markBookingPaid(request_id);
-  await transactionDetails(request_id, callbackBody);
+  // Write to DB
+  await transactionDetails(CheckoutRequestID, callbackBody);
+  await markBookingPaid(CheckoutRequestID);
+
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-}));
+}));   
 
 // Idempotent: calling twice does nothing the second time
 export async function markBookingPaid(request_id) {
