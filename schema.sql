@@ -31,6 +31,7 @@ CREATE TABLE mgt_auth (
 CREATE TABLE events (
   event_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        VARCHAR(160) NOT NULL,
+  headliner   VARCHAR(160),
   approver_id UUID REFERENCES mgt_users(user_id),
   location    VARCHAR(200) NOT NULL,
   event_date  TIMESTAMPTZ NOT NULL,
