@@ -11,7 +11,7 @@ const r = Router();
 // PUBLIC: revellers browse events (no login). Only show sellable stages.
 r.get('/', wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT e.event_id, e.name, e.location, e.event_date, e.event_stage,
+    `SELECT e.event_id, e.name, e.headliner, e.location, e.event_date, e.event_stage,
             json_agg(json_build_object('tierId', t.tier_id, 'type', t.type, 'price', t.price, 'available', t.available)) AS tiers
      FROM events e LEFT JOIN ticket_tiers t ON t.event_id = e.event_id
      WHERE e.event_stage IN ('published','on_sale','sold_out')
@@ -21,7 +21,7 @@ r.get('/', wrap(async (req, res) => {
 
 r.get('/:id', wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT e.event_id, e.name, e.location, e.event_date, e.event_stage,
+    `SELECT e.event_id, e.name, e.headliner, e.location, e.event_date, e.event_stage,
             json_agg(
               json_build_object(
                 'tierId', t.tier_id,
@@ -41,12 +41,12 @@ r.get('/:id', wrap(async (req, res) => {
 
 // ADMIN: create event + its ticket tiers in one transaction
 r.post('/', requireAuth, requireRole('coordinator'), audit('create_event', 'events'), wrap(async (req, res) => {
-  const { name, location, eventDate, tiers } = req.body; // tiers: [{type:'regular', price:1000, total:500}]
+  const { name, headliner, location, eventDate, tiers } = req.body; // tiers: [{type:'regular', price:1000, total:500}]
   if (!name || !location || !eventDate || !tiers?.length) throw httpError(400, 'Missing fields');
   const eventId = await withTransaction(async (c) => {
     const e = await c.query(
-      'INSERT INTO events (name, location, event_date, approver_id) VALUES ($1,$2,$3,$4) RETURNING event_id',
-      [name, location, eventDate, req.user.userId]);
+      'INSERT INTO events (name, headliner, location, event_date, approver_id) VALUES ($1,$2,$3,$4,$5) RETURNING event_id',
+      [name, headliner || null, location, eventDate, req.user.userId]);
     for (const t of tiers)
       await c.query('INSERT INTO ticket_tiers (event_id, type, price, total, available) VALUES ($1,$2,$3,$4,$4)',
         [e.rows[0].event_id, t.type, t.price, t.total]);
@@ -56,11 +56,12 @@ r.post('/', requireAuth, requireRole('coordinator'), audit('create_event', 'even
 }));
 
 r.patch('/:id', requireAuth, requireRole('coordinator'), audit('update_event', 'events'), wrap(async (req, res) => {
-  const { name, location, eventDate } = req.body;
+  const { name, headliner, location, eventDate } = req.body;
   const { rowCount } = await query(
-    `UPDATE events SET name = COALESCE($1,name), location = COALESCE($2,location),
-     event_date = COALESCE($3,event_date) WHERE event_id = $4 AND event_stage IN ('draft','published')`,
-    [name, location, eventDate, req.params.id]);
+    `UPDATE events SET name = COALESCE($1,name), headliner = COALESCE($2,headliner),
+     location = COALESCE($3,location), event_date = COALESCE($4,event_date)
+     WHERE event_id = $5 AND event_stage IN ('draft','published')`,
+    [name, headliner, location, eventDate, req.params.id]);
   if (!rowCount) throw httpError(409, 'Event not found or no longer editable');
   res.json({ message: 'Updated' });
 }));

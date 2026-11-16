@@ -3,7 +3,7 @@ import { query } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import { audit } from '../middleware/audit.js';
-import { wrap } from '../middleware/errorHandler.js';
+import { httpError, wrap } from '../middleware/errorHandler.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -108,6 +108,22 @@ router.post('/events/:id/costs', requireRole('finance'), audit('add_cost', 'cost
     'INSERT INTO costs (event_id, name, classification, amount, cost_date) VALUES ($1,$2,$3,$4,COALESCE($5, now())) RETURNING *',
     [req.params.id, name, classification, amount, costDate]);
   res.status(201).json(rows[0]);
+}));
+
+router.patch('/events/:id/costs/:costId', requireRole('finance'), audit('edit_cost', 'costs'), wrap(async (req, res) => {
+  const { name, classification, amount, costDate } = req.body;
+  const { rowCount, rows } = await query(
+    `UPDATE costs
+      SET name = COALESCE($1, name),
+          classification = COALESCE($2, classification),
+          amount = COALESCE($3, amount),
+          cost_date = COALESCE($4, cost_date)
+     WHERE cost_id = $5 AND event_id = $6
+     RETURNING *`,
+    [name, classification, amount, costDate, req.params.costId, req.params.id]
+  );
+  if (!rowCount) throw httpError(404, 'Cost not found');
+  res.json(rows[0]);
 }));
 
 

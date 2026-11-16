@@ -6,18 +6,13 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import { audit } from '../middleware/audit.js';
 import { httpError, wrap } from '../middleware/errorHandler.js';
+import { sendEntourageVerificationEmail, sendVerificationEmail } from '../middleware/email.js';
 
 const r = Router();
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ARTIST_TOKEN_LIFETIME = '2h';
-
-// TODO: connect a real email service. For now the link is only printed in the server log.
-// (Do not keep this in production: the link lets anyone act as the artist.)
-function sendVerificationEmail(artist, token) {
-  const link = `${process.env.FRONTEND_URL}/artist/verify/${token}`;
-  console.log(`Verification link for ${artist.email}: ${link}`);
-}
+const VERIFICATION_TOKEN_LIFETIME_MS = 72 * 60 * 60 * 1000;
 
 function requireArtist(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -66,14 +61,15 @@ r.post('/', requireAuth, requireRole('coordinator'), audit('add_artist', 'artist
   if (!name || !name.trim()) throw httpError(400, 'name is required');
   if (!EMAIL_PATTERN.test(email || '')) throw httpError(400, 'A valid email is required');
 
-  // Random secret that goes into the emailed link
-  const verificationToken = crypto.randomBytes(32).toString('hex');
+  // The issue time allows the link to expire without a schema change.
+  const verificationToken =
+    `${Date.now().toString(36)}.${crypto.randomBytes(32).toString('hex')}`;
 
   let artist;
   try {
     const { rows } = await query(
-      `INSERT INTO artists (event_id, name, email, verification_token)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO artists (event_id, name, email, verification_token, verification_sent)
+       VALUES ($1, $2, $3, $4, true)
        RETURNING artist_id AS id, name, email, is_verified AS "isVerified"`,
       [eventId, name.trim(), email.trim().toLowerCase(), verificationToken]);
     artist = rows[0];
@@ -83,14 +79,29 @@ r.post('/', requireAuth, requireRole('coordinator'), audit('add_artist', 'artist
     throw err;
   }
 
-  sendVerificationEmail(artist, verificationToken);
+  const emailResult = await sendVerificationEmail(artist, verificationToken);
+  if (!emailResult.success) {
+    await query('DELETE FROM artists WHERE artist_id = $1', [artist.id]);
+    throw httpError(502, 'Artist was not added because the verification email could not be sent');
+  }
+
   res.status(201).json(artist);
 }));
 
 // verify the artist's email by clicking the link. Returns a JWT for further requests.
 r.post('/verify/:token', wrap(async (req, res) => {
+  const tokenIssuedAt = Number.parseInt(req.params.token.split('.')[0], 36);
+  if (
+    !Number.isFinite(tokenIssuedAt) ||
+    Date.now() - tokenIssuedAt > VERIFICATION_TOKEN_LIFETIME_MS
+  ) {
+    throw httpError(410, 'This verification link has expired');
+  }
+
   const { rows } = await query(
-    `UPDATE artists SET is_verified = true WHERE verification_token = $1
+    `UPDATE artists
+     SET is_verified = true, verification_token = NULL
+     WHERE verification_token = $1 AND verification_sent = true AND is_verified = false
      RETURNING artist_id AS id, event_id AS "eventId", name`, [req.params.token]);
 
   if (rows.length === 0) throw httpError(404, 'This link is not valid');
@@ -119,6 +130,31 @@ r.put('/profile', requireArtist, wrap(async (req, res) => {
   res.json({ message: 'Profile saved' });
 }));
 
+// Verify an entourage member's email from their invitation link.
+r.post('/entourage/verify/:token', wrap(async (req, res) => {
+  let payload;
+  try {
+    payload = jwt.verify(req.params.token, process.env.ARTIST_TOKEN_SECRET);
+  } catch {
+    throw httpError(410, 'This verification link is invalid or expired');
+  }
+
+  if (payload.type !== 'entourage' || payload.artistId !== req.query.artistId) {
+    throw httpError(404, 'This verification link is not valid');
+  }
+
+  const { rows } = await query(
+    `UPDATE entourage
+     SET is_verified = true
+     WHERE entourage_id = $1 AND artist_id = $2 AND is_verified = false
+     RETURNING entourage_id AS id, name`,
+    [payload.entourageId, payload.artistId]
+  );
+  if (rows.length === 0) throw httpError(404, 'This verification link is not valid');
+
+  res.json({ member: rows[0] });
+}));
+
 // artist adds entourage members (bandmates, dancers, etc). Only after verification. Each member gets a row in the DB.
 r.post('/entourage', requireArtist, wrap(async (req, res) => {
   const { members } = req.body;
@@ -130,9 +166,7 @@ r.post('/entourage', requireArtist, wrap(async (req, res) => {
   // Check everyone first, so we never save only half of the list
   for (const member of members) {
     if (!member.name || !member.name.trim()) throw httpError(400, 'Every member needs a name');
-    if (member.email && !EMAIL_PATTERN.test(member.email)) {
-      throw httpError(400, `Invalid email: ${member.email}`);
-    }
+    if (!EMAIL_PATTERN.test(member.email || '')) throw httpError(400, 'Every member needs a valid email');
   }
 
   const saved = [];
@@ -141,7 +175,26 @@ r.post('/entourage', requireArtist, wrap(async (req, res) => {
       `INSERT INTO entourage (artist_id, name, email) VALUES ($1, $2, $3)
        RETURNING entourage_id AS id, name, email`,
       [req.artistId, member.name.trim(), member.email ? member.email.trim().toLowerCase() : null]);
-    saved.push(rows[0]);
+    const savedMember = rows[0];
+    const artistResult = await query(
+      'SELECT artist_id AS id, name FROM artists WHERE artist_id = $1',
+      [req.artistId]
+    );
+    const invitationToken = jwt.sign(
+      { entourageId: savedMember.id, artistId: req.artistId, type: 'entourage' },
+      process.env.ARTIST_TOKEN_SECRET,
+      { expiresIn: '72h' }
+    );
+    const emailResult = await sendEntourageVerificationEmail(
+      savedMember,
+      artistResult.rows[0],
+      invitationToken
+    );
+    if (!emailResult.success) {
+      await query('DELETE FROM entourage WHERE entourage_id = $1', [savedMember.id]);
+      throw httpError(502, 'Entourage member was not added because the verification email could not be sent');
+    }
+    saved.push(savedMember);
   }
   res.status(201).json(saved);
 }));
