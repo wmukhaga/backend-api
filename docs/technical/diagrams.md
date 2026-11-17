@@ -4,44 +4,48 @@ All diagrams are Mermaid, so they render directly on GitHub. The ERD source is a
 
 ## 1. Use case diagram
 
-Mermaid has no native use case type, so this uses a flowchart: actors on the left, use cases in the boxes.
+Actors (stick figures) sit outside the system boundary. Each use case is an oval inside the system rectangle. The dashed arrow means "Book tickets" includes "Pay by M-Pesa".
+
+![Use case diagram](usecase.svg)
+
+PNG copy: [usecase.png](usecase.png). The Mermaid version below draws the same model if you prefer to edit it as text (ovals inside the TikoSorted rectangle, actors as plain boxes, because Mermaid cannot draw stick figures):
 
 ```mermaid
 flowchart LR
-  Rev([Reveller])
-  Art([Artist])
-  Mgr([Manager])
-  Coo([Coordinator])
-  Fin([Finance])
-  Hos([Hospitality])
-  Com([Compliance])
-  Gate([Gate staff / Logistics])
-  Saf([Safaricom M-Pesa])
+  Rev[Reveller]
+  Art[Artist]
+  Mgr[Manager]
+  Coo[Coordinator]
+  Fin[Finance]
+  Hos[Hospitality]
+  Com[Compliance]
+  Gate[Gate staff / Logistics]
+  Saf[Safaricom M-Pesa]
 
   subgraph System[TikoSorted]
-    U1[Browse events]
-    U2[Book tickets and hold stock]
-    U3[Pay by M-Pesa]
-    U4[View e-ticket QR]
-    U5[Verify via email link]
-    U6[Save preferences]
-    U7[Add entourage]
-    U8[Create staff accounts]
-    U9[Create and edit event]
-    U10[Change event stage]
-    U11[Add artists]
-    U12[Manage tasks]
-    U13[Record costs]
-    U14[View dashboard and metrics]
-    U15[View artists and entourage]
-    U16[View audit logs]
-    U17[Download manifest]
-    U18[Scan tickets]
-    U19[Sync offline scans]
-    U20[Log in and out]
-    U21[Validate ticket without using it]
-    U22[Confirm entourage email]
-    U23[Edit cost entries]
+    U1([Browse events])
+    U2([Book tickets and hold stock])
+    U3([Pay by M-Pesa])
+    U4([View e-ticket QR])
+    U5([Verify via email link])
+    U6([Save preferences])
+    U7([Add entourage])
+    U8([Create staff accounts])
+    U9([Create and edit event])
+    U10([Change event stage])
+    U11([Add artists])
+    U12([Manage tasks])
+    U13([Record costs])
+    U14([View dashboard and metrics])
+    U15([View artists and entourage])
+    U16([View audit logs])
+    U17([Download manifest])
+    U18([Scan tickets])
+    U19([Sync offline scans])
+    U20([Log in and out])
+    U21([Validate ticket without using it])
+    U22([Confirm entourage email])
+    U23([Edit cost entries])
   end
 
   Rev --> U1
@@ -312,6 +316,12 @@ sequenceDiagram
 ```
 
 ## 8. Entity relationship diagram
+
+Exported from dbdiagram.io (source in [schema.dbml](schema.dbml)):
+
+![ERD from dbdiagram.io](erd.png)
+
+The same model as Mermaid, which renders on GitHub:
 
 ```mermaid
 erDiagram
