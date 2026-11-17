@@ -1,0 +1,243 @@
+Enum user_role {
+  manager
+  coordinator
+  finance
+  logistics
+  production
+  marketing
+  hospitality
+  compliance
+  gate_staff
+}
+
+Enum event_stage {
+  draft
+  published
+  on_sale
+  sold_out
+  ongoing
+  completed
+  cancelled
+}
+
+Enum ticket_type {
+  regular
+  vip
+  vvip
+  early_bird
+}
+
+Enum ticket_status {
+  held
+  paid
+  verified
+  used
+}
+
+Enum booking_status {
+  held
+  paid
+  expired
+  cancelled
+}
+
+Enum cost_class {
+  marketing
+  sound_equipment
+  artist
+  on_ground
+}
+
+Table mgt_users {
+  user_id uuid [pk, default: `gen_random_uuid()`]
+  name varchar(120) [not null]
+  staff_id varchar(40) [unique, not null]
+  email varchar(160) [unique, not null]
+  role user_role [not null]
+  joined_at timestamptz [not null, default: `now()`]
+}
+
+Table mgt_auth {
+  auth_id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [unique, not null]
+  password_hash varchar(100) [not null]
+  is_active boolean [not null, default: false]
+  last_login timestamptz
+  device_metadata jsonb
+  token_id uuid
+  expires_at timestamptz
+}
+
+Table events {
+  event_id uuid [pk, default: `gen_random_uuid()`]
+  name varchar(160) [not null]
+  headliner varchar(160)
+  approver_id uuid
+  location varchar(200) [not null]
+  event_date timestamptz [not null]
+  event_stage event_stage [not null, default: 'draft']
+  is_cancelled boolean [not null, default: false]
+}
+
+Table ticket_tiers {
+  tier_id uuid [pk, default: `gen_random_uuid()`]
+  event_id uuid [not null]
+  type ticket_type [not null]
+  price numeric(10,2) [not null]
+  total int [not null]
+  available int [not null]
+
+  indexes {
+    (event_id, type) [unique]
+  }
+}
+
+Table bookings {
+  booking_id uuid [pk, default: `gen_random_uuid()`]
+  idempotency_key varchar(100) [unique, not null]
+  event_id uuid [not null]
+  tier_id uuid [not null]
+  no_of_tickets int [not null]
+  amount numeric(10,2) [not null]
+  booker_phone varchar(20)
+  booker_email varchar(160)
+  status booking_status [not null, default: 'held']
+  hold_expires_at timestamptz
+  booked_at timestamptz [not null, default: `now()`]
+}
+
+Table payments {
+  payment_id uuid [pk, default: `gen_random_uuid()`]
+  booking_id uuid [not null]
+  method varchar(10) [not null]
+  provider_ref varchar(100) [unique]
+  amount numeric(10,2) [not null]
+  status varchar(10) [not null, default: 'pending']
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table transaction_details {
+  transaction_id uuid [pk, default: `gen_random_uuid()`]
+  merchant_id varchar(255)
+  request_id varchar(255) [unique, not null]
+  amount numeric(10,2) [not null]
+  phone_no varchar(12) [not null]
+  result_code int
+  receipt_no varchar(255)
+  transaction_timestamp timestamptz [default: `now()`]
+  reference varchar(50) [not null]
+  description varchar(100) [default: 'ticket booking payment']
+}
+
+Table tickets {
+  ticket_id uuid [pk, default: `gen_random_uuid()`]
+  booking_id uuid [not null]
+  event_id uuid [not null]
+  tier_id uuid [not null]
+  status ticket_status [not null, default: 'held']
+  qr_payload text [unique]
+  used_at timestamptz
+
+  indexes {
+    (event_id, status) [name: 'idx_tickets_event_status']
+  }
+}
+
+Table offline_sync_logs {
+  sync_id uuid [pk, default: `gen_random_uuid()`]
+  ticket_id uuid [not null]
+  scanner_device_id varchar(80) [not null]
+  scanned_at timestamptz [not null]
+  is_reconciled boolean [not null, default: false]
+  conflict boolean [not null, default: false]
+}
+
+Table artists {
+  artist_id uuid [pk, default: `gen_random_uuid()`]
+  event_id uuid [not null]
+  name varchar(120) [not null]
+  email varchar(160) [not null]
+  preference jsonb
+  verification_token varchar(100)
+  verification_sent boolean [not null, default: false]
+  is_verified boolean [not null, default: false]
+
+  indexes {
+    (event_id, email) [unique]
+  }
+}
+
+Table entourage {
+  entourage_id uuid [pk, default: `gen_random_uuid()`]
+  artist_id uuid [not null]
+  name varchar(120) [not null]
+  email varchar(160)
+  is_verified boolean [not null, default: false]
+}
+
+Table costs {
+  cost_id uuid [pk, default: `gen_random_uuid()`]
+  event_id uuid [not null]
+  name varchar(160) [not null]
+  classification cost_class [not null]
+  cost_date timestamptz [not null, default: `now()`]
+  amount numeric(12,2) [not null]
+}
+
+Table tasks {
+  task_id uuid [pk, default: `gen_random_uuid()`]
+  event_id uuid [not null]
+  title varchar(200) [not null]
+  assigned_to uuid
+  resource text
+  deadline timestamptz
+  status varchar(12) [not null, default: 'todo']
+}
+
+Table audit_logs {
+  log_id uuid [pk, default: `gen_random_uuid()`]
+  actor_id uuid [not null]
+  action varchar(80) [not null]
+  resource varchar(80) [not null]
+  log_timestamp timestamptz [not null, default: `now()`]
+  log_metadata jsonb
+}
+
+// Relationships
+
+Ref: mgt_auth.user_id - mgt_users.user_id
+
+Ref: events.approver_id > mgt_users.user_id
+
+Ref: ticket_tiers.event_id > events.event_id
+
+Ref: bookings.event_id > events.event_id
+Ref: bookings.tier_id > ticket_tiers.tier_id
+
+Ref: payments.booking_id > bookings.booking_id
+
+Ref: tickets.booking_id > bookings.booking_id
+Ref: tickets.event_id > events.event_id
+Ref: tickets.tier_id > ticket_tiers.tier_id
+
+Ref: offline_sync_logs.ticket_id > tickets.ticket_id
+
+Ref: artists.event_id > events.event_id
+
+Ref: entourage.artist_id > artists.artist_id
+
+Ref: costs.event_id > events.event_id
+
+Ref: tasks.event_id > events.event_id
+Ref: tasks.assigned_to > mgt_users.user_id
+
+Ref: audit_logs.actor_id > mgt_users.user_id
+
+// Constraints present in schema.sql but not expressible above:
+// ticket_tiers: price >= 0, total >= 0, 0 <= available <= total
+// bookings: no_of_tickets > 0
+// payments: method in ('mpesa','card'), status in ('pending','success','failed')
+// tasks: status in ('todo','in_progress','done')
+// costs: amount >= 0
+// ON DELETE CASCADE: mgt_users->mgt_auth, events->ticket_tiers/artists/costs/tasks,
+//                    bookings->tickets, artists->entourage
