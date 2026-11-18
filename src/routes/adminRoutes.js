@@ -4,6 +4,8 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import { audit } from '../middleware/audit.js';
 import { httpError, wrap } from '../middleware/errorHandler.js';
+import { sendPdfToUser } from '../middleware/email.js';
+import {buildReportHtml} from '../middleware/email.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -16,6 +18,20 @@ const COST_CLASS_NAMES = {
 };
 
 const REPORT_ROLES = ['finance', 'coordinator', 'manager'];
+
+const escapeHtml = (value = '') =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const formatMoney = (value) =>
+  new Intl.NumberFormat('en-KE', {
+    style: 'currency',
+    currency: 'KES',
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0);
 
 router.get('/dashboard', requireRole(...REPORT_ROLES), wrap(async (req, res) => {
   const [events, tasks, revenue, upcoming, activity] = await Promise.all([
@@ -100,6 +116,52 @@ router.get('/events/:id/costs', requireRole(...REPORT_ROLES), wrap(async (req, r
      FROM costs WHERE event_id = $1 ORDER BY cost_date`, [req.params.id]);
 
   res.json(rows.map((row) => ({ ...row, classification: COST_CLASS_NAMES[row.classification] })));
+}));
+
+router.post('/events/:id/report/email', requireRole(...REPORT_ROLES), wrap(async (req, res) => {
+  const eventId = req.params.id;
+
+  const [eventResult, sold, perTier, costs, userResult] = await Promise.all([
+    query('SELECT name, event_date, location FROM events WHERE event_id = $1', [eventId]),
+    query(
+      `SELECT COALESCE(SUM(no_of_tickets),0)::int AS tickets_sold,
+              COALESCE(SUM(amount),0)::float8 AS revenue
+       FROM bookings WHERE event_id = $1 AND status = 'paid'`,
+      [eventId]
+    ),
+    query(
+      `SELECT t.type::text AS type, SUM(b.no_of_tickets)::int AS tickets
+       FROM bookings b
+       JOIN ticket_tiers t ON t.tier_id = b.tier_id
+       WHERE b.event_id = $1 AND b.status = 'paid'
+       GROUP BY t.type`,
+      [eventId]
+    ),
+    query(
+      `SELECT classification::text AS classification, COALESCE(SUM(amount),0)::float8 AS amount
+       FROM costs WHERE event_id = $1 GROUP BY classification`,
+      [eventId]
+    ),
+    query('SELECT name, email FROM mgt_users WHERE user_id = $1', [req.user.userId]),
+  ]);
+
+  if (!eventResult.rows[0]) throw httpError(404, 'Event not found');
+  if (!userResult.rows[0]?.email) throw httpError(400, 'Current user has no email address');
+
+  const event = eventResult.rows[0];
+  const totalCosts = costs.rows.reduce((sum, row) => sum + Number(row.amount), 0);
+  const netRevenue = Number(sold.rows[0].revenue) - totalCosts;
+
+  const pdfHtml = buildReportHtml({ event, sold, perTier, costs, totalCosts, netRevenue });
+  const result = await sendPdfToUser(userResult.rows[0], {
+    subject: `Event report: ${event.name}`,
+    filename: `event-report-${eventId}.pdf`,
+    message: `The report for ${event.name} is attached.`,
+    pdfHtml,
+  });
+
+  if (!result.success) throw httpError(502, result.error || 'Report email could not be sent');
+  res.json({ success: true, message: 'Report sent to your email' });
 }));
 
 router.post('/events/:id/costs', requireRole('finance'), audit('add_cost', 'costs'), wrap(async (req, res) => {

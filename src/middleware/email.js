@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import QRCode from 'qrcode';
+import puppeteer from 'puppeteer';
 
 const APP_NAME = process.env.APP_NAME || 'Event Manager';
 let transporter = null;
@@ -28,16 +29,19 @@ function getTransporter() {
   return transporter;
 }
 
-
-
 // ---------- helpers ----------
-
 const escapeHtml = (value = '') =>
   String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+
+const formatMoney = (value) => new Intl.NumberFormat('en-KE', {
+    style: 'currency',
+    currency: 'KES',
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0);
 
 function layout(title, bodyHtml) {
   return `
@@ -213,3 +217,128 @@ export async function sendTicketEmail({to,eventName,tierName,quantity,qrPayloads
 }
 
 
+export async function generatePdfBuffer(html) {
+  const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
+  try{
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdfBuffer = await page.pdf({ 
+      format: 'A4', 
+      printBackground: true,
+      margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
+    });
+    return Buffer.from(pdfBuffer);
+
+  }catch(err){
+    console.error('[pdf] failed to generate PDF', err.message);
+    throw err;
+  }finally{
+    await browser.close();
+  }
+}
+
+export async function sendPdfEmail({ to, subject, text, html, pdfBuffer, filename }) {
+  if (!pdfBuffer || !filename) {
+    console.warn('[pdf email] no PDF buffer or filename; email skipped');
+    return { success: false, error: 'No PDF buffer or filename' };
+  }
+  return sendEmail({
+    to,
+    subject,
+    text : `Hello,\n\nPlease find the attached report PDF document.\n\n${text || ''}`,
+    html,
+    attachments: [
+      {
+        filename,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  });
+}
+
+export function buildReportHtml({ event, sold, perTier, costs, totalCosts, netRevenue }) {
+  const tierRows = perTier.rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.type.toUpperCase())}</td>
+      <td style="text-align:right">${row.tickets}</td>
+    </tr>
+  `).join('');
+
+  const costRows = costs.rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(COST_CLASS_NAMES[row.classification] || row.classification)}</td>
+      <td style="text-align:right">${formatMoney(row.amount)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; color: #1e293b; }
+          h1 { margin-bottom: 4px; }
+          .muted { color: #64748b; }
+          .summary { display: flex; gap: 16px; margin: 24px 0; }
+          .card { flex: 1; border: 1px solid #cbd5e1; padding: 14px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th, td { border-bottom: 1px solid #e2e8f0; padding: 8px 6px; }
+          th { text-align: left; background: #f1f5f9; }
+        </style>
+      </head>
+      <body>
+        <h1>Event Report</h1>
+        <p><strong>${escapeHtml(event.name)}</strong></p>
+        <p class="muted">${escapeHtml(event.location || '')}${event.event_date ? ` — ${new Date(event.event_date).toLocaleDateString()}` : ''}</p>
+
+        <div class="summary">
+          <div class="card"><strong>${sold.rows[0].tickets_sold}</strong><br>Tickets sold</div>
+          <div class="card"><strong>${formatMoney(sold.rows[0].revenue)}</strong><br>Revenue</div>
+          <div class="card"><strong>${formatMoney(totalCosts)}</strong><br>Total costs</div>
+          <div class="card"><strong>${formatMoney(netRevenue)}</strong><br>Net revenue</div>
+        </div>
+
+        <h2>Ticket distribution</h2>
+        <table>
+          <thead><tr><th>Tier</th><th style="text-align:right">Tickets</th></tr></thead>
+          <tbody>${tierRows || '<tr><td colspan="2">No paid tickets</td></tr>'}</tbody>
+        </table>
+
+        <h2>Budget breakdown</h2>
+        <table>
+          <thead><tr><th>Classification</th><th style="text-align:right">Amount</th></tr></thead>
+          <tbody>${costRows || '<tr><td colspan="2">No costs recorded</td></tr>'}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+export async function sendPdfToUser(user, { subject, pdfHtml, filename, message = '' }) {
+  if (!user?.email) {
+    return { success: false, error: 'User has no email address' };
+  }
+
+  let pdfBuffer;
+  try {
+    pdfBuffer = await generatePdfBuffer(pdfHtml);
+  } catch (err) {
+    console.error('[pdf email] PDF generation failed:', err.message);
+    return { success: false, error: `PDF generation failed: ${err.message}` };
+  }
+
+  const name = user.name || 'there';
+  return sendPdfEmail({
+    to: user.email,
+    subject,
+    text: message,
+    html: layout(
+      subject,
+      `<p>Hi ${escapeHtml(name)},</p><p>${escapeHtml(message || 'Your PDF is attached.')}</p>`
+    ),
+    pdfBuffer,
+    filename: filename || `document-${Date.now()}.pdf`,
+  });
+}

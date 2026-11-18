@@ -1,7 +1,5 @@
 // server.js - entry point: builds the Express app and starts listening
 import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,6 +9,7 @@ import apiRoutes from './routes/index.js';
 
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { startHoldSweeper } from './jobs/releaseExpiredHolds.js';
+import { limiter } from './middleware/rateLimit.js';
 
 
 dotenv.config();
@@ -19,11 +18,15 @@ const PORT = process.env.PORT || 3000;
 
 // global middleware
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
 app.use(morgan('dev'));                // request logging
 app.use(express.json());               // parse JSON bodies -> req.body
 
 // backend API routes 
+app.use('/api', limiter);  
 app.use('/api', apiRoutes);
 
 // error handling middleware (must be last)
