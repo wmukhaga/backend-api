@@ -10,6 +10,54 @@ import {buildReportHtml} from '../middleware/email.js';
 const router = Router();
 router.use(requireAuth);
 
+async function getEventReportData(eventId) {
+  const [eventResult, sold, perTier, costRows] = await Promise.all([
+    query('SELECT name, event_date, location FROM events WHERE event_id = $1', [eventId]),
+    query(
+      `SELECT COALESCE(SUM(no_of_tickets),0)::int AS tickets_sold,
+              COALESCE(SUM(amount),0)::float8 AS revenue
+       FROM bookings WHERE event_id = $1 AND status = 'paid'`,
+      [eventId]
+    ),
+    query(
+      `SELECT t.type::text AS type, SUM(b.no_of_tickets)::int AS tickets
+       FROM bookings b
+       JOIN ticket_tiers t ON t.tier_id = b.tier_id
+       WHERE b.event_id = $1 AND b.status = 'paid'
+       GROUP BY t.type`,
+      [eventId]
+    ),
+    query(
+      `SELECT classification::text AS classification,
+              COALESCE(SUM(amount),0)::float8 AS amount
+       FROM costs WHERE event_id = $1 GROUP BY classification`,
+      [eventId]
+    ),
+  ]);
+
+  if (!eventResult.rows[0]) return null;
+
+  const totalCosts = costRows.rows.reduce((sum, row) => sum + Number(row.amount), 0);
+  const revenue = Number(sold.rows[0].revenue);
+  const byTier = {};
+  for (const row of perTier.rows) byTier[row.type.toUpperCase()] = row.tickets;
+
+  return {
+    event: eventResult.rows[0],
+    sold: {
+      rows: [{
+        tickets_sold: sold.rows[0].tickets_sold,
+        revenue,
+      }],
+    },
+    perTier,
+    costs: costRows,
+    totalCosts,
+    netRevenue: revenue - totalCosts,
+    byTier,
+  };
+}
+
 const COST_CLASS_NAMES = {
   marketing: 'MARKETING',
   artist: 'ARTISTS',
@@ -82,40 +130,30 @@ router.get('/tasks', wrap(async (req, res) => {
 
 
 router.get('/events/:id/metrics', requireRole(...REPORT_ROLES), wrap(async (req, res) => {
-  const sold = await query(
-    `SELECT COALESCE(SUM(no_of_tickets),0)::int AS tickets_sold, COALESCE(SUM(amount),0)::float8 AS revenue
-     FROM bookings WHERE event_id = $1 AND status = 'paid'`, [req.params.id]);
-
-  const perTier = await query(
-    `SELECT t.type::text AS type, SUM(b.no_of_tickets)::int AS tickets FROM bookings b 
-     JOIN ticket_tiers t ON t.tier_id = b.tier_id
-     WHERE b.event_id = $1 AND b.status = 'paid' GROUP BY t.type`, [req.params.id]);
-
-  const costs = await query(
-    'SELECT COALESCE(SUM(amount),0)::float8 AS total_costs FROM costs WHERE event_id = $1',
-    [req.params.id]);
-
-  const byTier = {};
-  for (const row of perTier.rows) byTier[row.type.toUpperCase()] = row.tickets;
-
-  const { revenue } = sold.rows[0];
-  const totalCosts = costs.rows[0].total_costs;
+  const report = await getEventReportData(req.params.id);
+  if (!report) throw httpError(404, 'Event not found');
 
   res.json({
-    netRevenue: revenue - totalCosts,
-    revenue,
-    totalCosts,
-    tickets: { total: sold.rows[0].tickets_sold, byTier },
+    netRevenue: report.netRevenue,
+    revenue: report.sold.rows[0].revenue,
+    totalCosts: report.totalCosts,
+    tickets: { total: report.sold.rows[0].tickets_sold, byTier: report.byTier },
   });
 }));
 
 
 router.get('/events/:id/costs', requireRole(...REPORT_ROLES), wrap(async (req, res) => {
   const { rows } = await query(
-    `SELECT cost_id AS id, name, classification::text AS classification, amount::float8 AS amount, cost_date AS "costDate"
-     FROM costs WHERE event_id = $1 ORDER BY cost_date`, [req.params.id]);
+    `SELECT cost_id AS id, name, classification::text AS classification,
+            amount::float8 AS amount, cost_date AS "costDate"
+     FROM costs WHERE event_id = $1 ORDER BY cost_date`,
+    [req.params.id]
+  );
 
-  res.json(rows.map((row) => ({ ...row, classification: COST_CLASS_NAMES[row.classification] })));
+  res.json(rows.map((row) => ({
+    ...row,
+    classification: COST_CLASS_NAMES[row.classification],
+  })));
 }));
 
 router.post('/events/:id/report/email', requireRole(...REPORT_ROLES), wrap(async (req, res) => {

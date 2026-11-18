@@ -43,6 +43,13 @@ const formatMoney = (value) => new Intl.NumberFormat('en-KE', {
     maximumFractionDigits: 0,
   }).format(Number(value) || 0);
 
+const COST_CLASS_NAMES = {
+  marketing: 'MARKETING',
+  artist: 'ARTISTS',
+  sound_equipment: 'SOUND_EQUIP',
+  on_ground: 'ON_GROUND',
+};
+
 function layout(title, bodyHtml) {
   return `
   <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#222">
@@ -54,14 +61,13 @@ function layout(title, bodyHtml) {
 }
 
 
-export async function sendEmail({ to, subject, text, html, attachments }) {
-  // No SMTP configured: log in development, refuse in production
+async function sendViaSmtp({ to, subject, text, html, attachments }) {
   if (!isConfigured()) {
     if (process.env.NODE_ENV === 'production') {
       console.error('[email] SMTP is not configured; email NOT sent to', to);
       return { success: false, error: 'Email service is not configured' };
     }
-    console.log(`[email:dev] To: ${to}\nSubject: ${subject}\n${text}\n`);
+    console.log(`[email:dev:smtp] To: ${to}\nSubject: ${subject}\n${text}\n`);
     return { success: true, messageId: 'dev-log-only' };
   }
 
@@ -76,9 +82,22 @@ export async function sendEmail({ to, subject, text, html, attachments }) {
     });
     return { success: true, messageId: info.messageId };
   } catch (err) {
-    console.error('[email] Failed to send to', to, '-', err.message);
+    console.error('[email] SMTP failed to send to', to, '-', err.message);
     return { success: false, error: err.message };
   }
+}
+
+export async function sendEmail({ to, subject, text, html, attachments, transport = 'default' }) {
+  if (transport === 'smtp') {
+    return sendViaSmtp({ to, subject, text, html, attachments });
+  }
+  if (transport === 'resend' || (transport === 'default' && process.env.RESEND_API_KEY)) {
+    if (!process.env.RESEND_API_KEY) {
+      return { success: false, error: 'Resend is not configured' };
+    }
+    return sendViaResend({ to, subject, text, html, attachments });
+  }
+  return sendViaSmtp({ to, subject, text, html, attachments });
 }
 
 // artist verification email
@@ -89,6 +108,7 @@ export function sendVerificationEmail(artist, token, { eventName, expiresInHours
   return sendEmail({
     to: artist.email,
     subject: `Confirm your email${eventLine} - ${APP_NAME}`,
+    transport: 'smtp',
     text:
       `Hi ${artist.name},\n\n` +
       `You have been added${eventLine} on ${APP_NAME}. ` +
@@ -120,6 +140,7 @@ export function sendEntourageVerificationEmail(member, artist, token, { expiresI
   return sendEmail({
     to: member.email,
     subject: `${artist.name} added you to their entourage - ${APP_NAME}`,
+    transport: 'smtp',
     text:
       `Hi ${member.name},\n\n` +
       `${artist.name} added you to their entourage on ${APP_NAME}. ` +
@@ -138,6 +159,34 @@ export function sendEntourageVerificationEmail(member, artist, token, { expiresI
        <p style="font-size:13px;color:#666">Or paste this link into your browser:<br>${link}</p>
        <p style="font-size:13px;color:#666">The link expires in ${expiresInHours} hours.
           If you do not know ${escapeHtml(artist.name)}, you can ignore this email.</p>`
+    ),
+  });
+}
+
+// Password reset email
+export function sendPasswordResetEmail(user, token, { expiresInMinutes = 30 } = {}) {
+  const link = `${process.env.FRONTEND_URL}/admin/reset-password/${encodeURIComponent(token)}`;
+
+  return sendEmail({
+    to: user.email,
+    subject: `Reset your ${APP_NAME} password`,
+    transport: 'smtp',
+    text:
+      `Hi ${user.name || 'there'},\n\n` +
+      `Use this link to reset your password:\n${link}\n\n` +
+      `The link expires in ${expiresInMinutes} minutes.\n` +
+      `If you did not request a password reset, you can ignore this email.`,
+    html: layout(
+      'Reset your password',
+      `<p>Hi ${escapeHtml(user.name || 'there')},</p>
+       <p>Use the button below to reset your password.</p>
+       <p>
+         <a href="${link}" style="display:inline-block;background:#2563eb;color:#fff;
+            padding:12px 24px;border-radius:6px;text-decoration:none">Reset password</a>
+       </p>
+       <p style="font-size:13px;color:#666">Or paste this link into your browser:<br>${link}</p>
+       <p style="font-size:13px;color:#666">The link expires in ${expiresInMinutes} minutes.
+          If you did not request this reset, you can ignore this email.</p>`
     ),
   });
 }
@@ -216,26 +265,70 @@ export async function sendTicketEmail({to,eventName,tierName,quantity,qrPayloads
   });
 }
 
-
 export async function generatePdfBuffer(html) {
-  const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
-  try{
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', 
+      '--disable-gpu',
+      '--no-zygote',
+    ],
+    timeout: 60000,
+  });
+  try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({ 
-      format: 'A4', 
+    page.setDefaultTimeout(60000);
+    await page.setContent(html, { waitUntil: 'load' });
+    const pdf = await page.pdf({
+      format: 'A4',
       printBackground: true,
       margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
     });
-    return Buffer.from(pdfBuffer);
-
-  }catch(err){
-    console.error('[pdf] failed to generate PDF', err.message);
-    throw err;
-  }finally{
+    return Buffer.from(pdf);
+  } finally {
     await browser.close();
   }
 }
+
+async function sendViaResend({ to, subject, text, html, attachments }) {
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: process.env.MAIL_FROM,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        text,
+        html,
+        ...(process.env.REPLY_TO && { reply_to: process.env.REPLY_TO }),
+        attachments: attachments?.map((a) => ({
+          filename: a.filename,
+          content: Buffer.isBuffer(a.content)
+            ? a.content.toString('base64')
+            : a.content,
+        })),
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || `Resend error ${res.status}`);
+    }
+    return { success: true, messageId: data.id };
+  } catch (err) {
+    console.error('[email] Resend failed to send to', to, '-', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+
+
 
 export async function sendPdfEmail({ to, subject, text, html, pdfBuffer, filename }) {
   if (!pdfBuffer || !filename) {
@@ -245,6 +338,7 @@ export async function sendPdfEmail({ to, subject, text, html, pdfBuffer, filenam
   return sendEmail({
     to,
     subject,
+    transport: 'resend',
     text : `Hello,\n\nPlease find the attached report PDF document.\n\n${text || ''}`,
     html,
     attachments: [
