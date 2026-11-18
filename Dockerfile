@@ -3,7 +3,7 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci --omit=dev
-copy . .
+COPY . .
 
 FROM node:24-slim AS production
 WORKDIR /app
